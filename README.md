@@ -1,6 +1,6 @@
 # Quantize Docker Container (CUDA + Python 3.12)
 
-Container for GPU-accelerated LLM work using NVIDIA CUDA 12.8 + cuDNN with Python 3.12 and dependencies managed via `requirements.txt`.
+Container for GPU-accelerated LLM quantization work using NVIDIA CUDA 12.8 + cuDNN with Python 3.12 + llmcompressor from vLLM
 
 ## Prerequisites
 
@@ -11,7 +11,7 @@ Container for GPU-accelerated LLM work using NVIDIA CUDA 12.8 + cuDNN with Pytho
 
 - `Dockerfile` — CUDA 12.8 base, installs Python 3.12, installs `requirements.txt`, copies `src/`
 - `requirements.txt` — your Python dependencies
-- `src/run.py` — single entry script executed on container start
+- `src/run.py` — quantization script executed on container start
 - `.dockerignore` — keeps builds lean
 
 ## Adding dependencies
@@ -30,7 +30,7 @@ accelerate==0.33.*
 ## Build
 
 ```bash
-docker build -t quantize-cuda .
+docker build -t <YOUR IMAGE:TAG> .
 ```
 
 ## Run (with GPU)
@@ -39,26 +39,16 @@ docker build -t quantize-cuda .
 docker run --rm -it \
 	--gpus all \
 	--ipc=host \
-	-e HUGGINGFACE_HUB_TOKEN="$HUGGINGFACE_HUB_TOKEN" \
-	-v "$PWD":/workspace \
-	-w /workspace \
-	quantize-cuda
-```
-
-Inside the container, test PyTorch GPU (if installed):
-
-```bash
-python - <<'PY'
-import torch
-print('CUDA available:', torch.cuda.is_available())
-print('Devices:', torch.cuda.device_count())
-print('Device 0 name:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'N/A')
-PY
+	-e HF_TOKEN="$HF_TOKEN" \
+	-e HF_MODEL="Qwen/Qwen2.5-Coder-0.5B-Instruct" \
+	-e HF_MODEL_TOKENIZER="Qwen/Qwen2.5-Coder-0.5B-Instruct" \
+	-e QUANT_MODEL_NAME="Qwen2.5-Coder-0.5B-Instruct-INT8" \
+	realityenigma/llmcompressor-quantize:cuda-w8a8
 ```
 
 Container entrypoint
 
-This image runs `python -u src/run.py` on start, then exits. The script contains:
+This image runs `python -u src/app.py` on start (RunPod-compatible). `app.py` simply imports `run.py`, which contains the quantization logic and then exits.
 
 ```
 SAVE_DIR = "Qwen3-Coder-30B-A3B-Instruct-INT8"
@@ -66,26 +56,31 @@ model.save_pretrained(SAVE_DIR, save_compressed=True)
 tokenizer.save_pretrained(SAVE_DIR)
 ```
 
-Provide `model` and `tokenizer` in your environment or code (e.g., via mounted volumes or dependencies) before running the container so the script can save them.
+Provide the required environment variables so `run.py` can load and quantize your model, then save and push it.
 
-## Hugging Face token
+## Environment variables
 
-- Set `HUGGINGFACE_HUB_TOKEN` (and optionally `HF_TOKEN`) when running the container:
+- `HF_TOKEN` — Hugging Face access token (required for private/gated repos). Used by `huggingface_hub.login()`.
+- `HF_MODEL` — Model repo ID to load (e.g., `Qwen/Qwen2.5-Coder-0.5B-Instruct`).
+- `HF_MODEL_TOKENIZER` — Tokenizer repo ID to load (often same as `HF_MODEL`).
+- `QUANT_MODEL_NAME` — Output folder and Hub repo name for the quantized model (e.g., `Qwen2.5-Coder-0.5B-Instruct-INT8`).
+- `HF_HOME` — Optional cache dir for Hugging Face data (default set in image).
 
-```bash
-export HUGGINGFACE_HUB_TOKEN=hf_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-docker run --rm -it --gpus all --ipc=host \
-	-e HUGGINGFACE_HUB_TOKEN="$HUGGINGFACE_HUB_TOKEN" \
-	-v "$PWD":/workspace -w /workspace quantize-cuda
-```
+## Using a .env file
 
-- Or use a `.env` file (copy `.env.example` to `.env` and fill in):
+Copy `.env.example` to `.env` and fill in the values, then export and run:
 
 ```bash
 set -a; source .env; set +a
-docker run --rm -it --gpus all --ipc=host \
-	-e HUGGINGFACE_HUB_TOKEN="$HUGGINGFACE_HUB_TOKEN" \
-	-v "$PWD":/workspace -w /workspace quantize-cuda
+docker run --rm -it \
+	--gpus all \
+	--ipc=host \
+	-e HF_TOKEN="$HF_TOKEN" \
+	-e HF_MODEL="$HF_MODEL" \
+	-e HF_MODEL_TOKENIZER="$HF_MODEL_TOKENIZER" \
+	-e QUANT_MODEL_NAME="$QUANT_MODEL_NAME" \
+	-v "$PWD":/workspace -w /workspace \
+	quantize-cuda
 ```
 
 ## Notes
